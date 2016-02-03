@@ -1,0 +1,451 @@
+---
+title: "Weather Events 1993-2011: Consequences for the US Economy and the Public Health"
+output: 
+  html_document:
+    keep_md: true
+---
+
+```{r, include=TRUE, message=FALSE}
+
+  library(Hmisc)
+  library(dplyr)
+  library(data.table)
+  library(ggplot2)
+  library(gridExtra)
+  library(xtable)
+  library(knitr)
+
+  opts_chunk$set(echo=TRUE, cache=TRUE)
+
+```
+
+# Synopsis
+
+
+
+  The weather is arguably the topic most discussed by humans worldwide and within the United States, for good reason. Changes in the weather affect many aspects of daily life; extreme weather events can cause severe damage to agricultural productivity and property, and can cause injuries and fatalities on a scale exceeded only by warfare and infectious disease pandemics.  
+  
+  Some events are more newsworthy than others. For example, hurricanes and other major storms can eclipse national and world events that are obviously more important in terms of medium- to long-term economic and health consequences. But which types of weather events cause the most property and crop losses? Which types produce the highest number of casualties (major injuries and deaths)?  
+  
+```{r, setwd, include=TRUE, results='hide', cache=TRUE}  
+
+### Set the working directory, first making sure it exists  
+
+  workingDirectory <- paste("~/Box Sync/Coursera-data-science/",
+          "datasciencecoursera/Reproducible_Research/Project2",
+          sep="")
+  
+  if (dir.exists( workingDirectory) != TRUE) {
+    stop(sprintf("%s is not accessible as a directory.", 
+                 workingDirectory))
+  }
+  
+  # set working directory
+  
+  setwd(workingDirectory)
+
+
+### Download the data  
+   
+  dataURL <-
+   "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+  
+#     # download zip file
+#   download.file(url=dataURL,
+#                 destfile="tmp.bz2",
+#                 method="curl",
+#                 mode="wb")
+
+  
+  # make sure the zip file downloaded correctly
+  if ( file.exists("tmp.bz2") != TRUE) {
+    stop(sprintf("Download failed.\nURL: %s\nWorking directory: %s",
+                 dataURL,
+                 getwd()))
+  }
+
+
+
+  ### extract data file into a data.table object   
+  
+  nwsDT <- tbl_df(data.table(read.csv("tmp.bz2")) )    
+
+  # delete the zip file; it is no longer needed.
+#   if ( file.exists("tmp.bz2") == TRUE) {
+#     file.remove("tmp.bz2")
+#   }
+  f <- file.info("tmp.bz2")
+  dt <- as.character(f$ctime[1])
+  
+
+
+  
+```
+
+  This investigation attempts to elucidate these matters through the exploratory statistical analysis of a publicly available data set from the Nation Weather Service of the United States National Oceanic and Atmospheric Administration, downloaded from the URL [https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2].  
+  
+  Download date and time: `r I(dt)`  
+  
+  The analysis is exploratory in the sense that the author sought only to discover the relationship between weather event types and damage to the economy and public health. Causality cannot be demonstrated from the data available in this set, nor can we predict future trends, much less specific events. 
+  
+# Data Processing
+ 
+  
+## Date Range Restriction  
+ 
+  The data set contains data from as early as 1950, but the systematic recording of storm-related events appears to have begun in earnest in 1993. This is the earliest year, for example, in which either a tornado or hurricane was reported. Therefore, the data set employed in the analysis was a subset of the initial data set consisting of events from 1993 and later. The growth curve is depicted in the following figure.
+  
+```{r, include=TRUE, echo=TRUE}
+  
+  # convert text dates into real dates; add columns for month,
+  # day, and year
+  
+  nwsDT$BGN_DATE <- as.Date(as.character(nwsDT$BGN_DATE),"%m/%d/%Y")
+  nwsDT$END_DATE <- as.Date(as.character(nwsDT$END_DATE),"%m/%d/%Y")
+  nwsDT$BGN_DATE.Year <- as.integer(format.Date(nwsDT$BGN_DATE,"%Y"))
+  nwsDT$BGN_DATE.Month <- as.integer(format.Date(nwsDT$BGN_DATE,"%m"))
+  nwsDT$BGN_DATE.Day <- as.integer(format.Date(nwsDT$BGN_DATE,"%d"))
+  nwsDT$END_DATE.Year <- as.integer(format.Date(nwsDT$END_DATE,"%Y"))
+  nwsDT$END_DATE.Month <- as.integer(format.Date(nwsDT$END_DATE,"%m"))
+  nwsDT$END_DATE.Day <- as.integer(format.Date(nwsDT$END_DATE,"%d"))
+  
+  # change name of the "F" column; it causes trouble 
+  # even though we don't make use of it.
+  
+  nwsDT$EFF <- nwsDT$F
+  nwsDT <- select(nwsDT, -F)
+  
+  # filter to more recent time to ensure adequate density of data points
+  
+  nwsDT2 <- filter(nwsDT,BGN_DATE >'1993-01-01')
+
+
+  # count events per year (all types)
+  
+  nwsDT$idx <- 1 # kludge; there must be a better way in R to get counts
+
+  g <- group_by(nwsDT, BGN_DATE.Year)
+  s <- summarise(g, sum(idx))
+  
+  names(s) <- c("Year","Event.Count")
+  
+  p <- ggplot(s, 
+         aes(x = Year, y = Event.Count)) 
+  p <- p + geom_line() 
+  p <- p + ggtitle("NWS Storm Data Set: Recorded Events By Year") 
+  p <- p + labs(x = "Year", y = "Number of Events")
+
+  p
+ 
+ 
+```
+Figure 1: Growth in recorded storm events by year  
+
+```{r, include=TRUE, echo=TRUE}
+
+  # reduce to a workable set of columns to increase performance
+  nwsDT3 <- select(nwsDT2,
+                   EVTYPE,
+                   starts_with("BGN_D"),
+                   starts_with("END_D"),
+                   STATE,
+                   COUNTYNAME,
+                   ends_with("DMG"),
+                   starts_with("LATITUDE"),
+                   FATALITIES,
+                   INJURIES,
+                   CROPDMGEXP,
+                   PROPDMGEXP)
+  
+
+```
+
+
+## Adjust for exponents
+
+Cost and property damage have an exponent column that must be taken into account when calculating the actual monetary amounts. Per the documentation for the data set, we compute based on *DMGEXP values M = millions, B = billions, K = thousands, and H = hundreds.
+
+```{r echo=TRUE}
+  exponent = c('H' = 100, 'K' = 10^3, 'M' = 10^6, 'B' = 10^9)
+
+  nwsDT3$PROPDMG <- ifelse(toupper(nwsDT3$PROPDMGEXP) %in% names(exponent), 
+                          nwsDT3$PROPDMG * exponent[toupper(nwsDT3$PROPDMGEXP)], 
+                          0)
+  
+  nwsDT3$CROPDMG <- ifelse(toupper(nwsDT3$CROPDMGEXP) %in% names(exponent), 
+                          nwsDT3$CROPDMG * exponent[toupper(nwsDT3$CROPDMGEXP)], 
+                          0)
+  
+  # add columns for aggregate economic losses and casualties
+  
+  nwsDT3 <- within(nwsDT3, { 
+      Economic.Losses <- PROPDMG + CROPDMG 
+      Casualties <- FATALITIES + INJURIES
+      })
+  
+
+```
+
+## Normalization of Event Types
+
+  The event type names have not been standardized in this data set. For example, ten different event type names contain the word "hurricane", varying in case and specificity: some contain the name of the hurricane; some contain a specific effect such as "high winds"; some are in upper and some in mixed case.  
+  
+  To account for this, the author first obtained totals by event type for economic loss (crop and property damage) and for health damage (injuries and fatalities). Then he sorted these in descending order and reviewed the top 100 in each list. The two lists had considerable overlap, so the number of unique names to be normalized from those lists (hereinafter called the "training set") was around 120.  
+  
+  Normalizing accomplished using the grep function. In addition to the training set terms, the grep approach categorized 710 out of 985 event types in the original set.
+ 
+```{r, include=TRUE, echo=TRUE}
+
+  # get ready to normalize event type names
+  
+  nwsDT3$EVTYPE.save <- nwsDT3$EVTYPE
+  
+  flood <- nwsDT3[grep("flood", nwsDT3$EVTYPE, ignore.case = T),]
+  surge <- nwsDT3[grep("surge", nwsDT3$EVTYPE, ignore.case = T),]
+  surf <- nwsDT3[grep("h.* surf", nwsDT3$EVTYPE, ignore.case = T),]
+  
+  flooding <- rbind(flood,surge,surf)
+  
+  rm(flood,surge,surf)
+  
+  snow <- nwsDT3[grep("snow", nwsDT3$EVTYPE, ignore.case = T),]
+  freeze <- nwsDT3[grep("freez", nwsDT3$EVTYPE, ignore.case = T),]
+  wint <- nwsDT3[grep("wint.*r", nwsDT3$EVTYPE, ignore.case = T),]
+  ice <- nwsDT3[grep("ice", nwsDT3$EVTYPE, ignore.case = T),]
+  cold <- nwsDT3[grep("cold", nwsDT3$EVTYPE, ignore.case = T),]
+  
+  winter <- rbind(snow,freeze,wint,ice,cold)
+  
+  rm(snow,freeze,wint,ice,cold)
+  
+  drought <- nwsDT3[grep("drought", nwsDT3$EVTYPE, ignore.case = T),]
+  
+  fire <- nwsDT3[grep("fire", nwsDT3$EVTYPE, ignore.case = T),]
+  
+  fog <- nwsDT3[grep("fog", nwsDT3$EVTYPE, ignore.case = T),]
+  
+  rip <- nwsDT3[grep("^rip ", nwsDT3$EVTYPE, ignore.case = T),]
+  
+  lightning <- nwsDT3[grep("lightning", nwsDT3$EVTYPE, ignore.case = T),]
+  
+  hurr <- nwsDT3[grep("hurricane", nwsDT3$EVTYPE, ignore.case = T),]
+  typh <- nwsDT3[grep("typhoon", nwsDT3$EVTYPE, ignore.case = T),]
+  depr <- nwsDT3[grep("tropical depression", nwsDT3$EVTYPE, ignore.case = T),]
+  cyclone <- rbind(hurr,typh,depr)
+  rm(hurr,typh,depr)
+  
+  wind <- nwsDT3[grep("wind", nwsDT3$EVTYPE, ignore.case = T),]
+  hail <- nwsDT3[grep("hail", nwsDT3$EVTYPE, ignore.case = T),]
+
+  torna <- nwsDT3[grep("torna", nwsDT3$EVTYPE, ignore.case = T),]
+  tornd <- nwsDT3[grep("tornd", nwsDT3$EVTYPE, ignore.case = T),]
+  funn <- nwsDT3[grep("funnel", nwsDT3$EVTYPE, ignore.case = T),]
+  spout <- nwsDT3[grep("w.*spout", nwsDT3$EVTYPE, ignore.case = T),]
+  tornadoes <- rbind(torna,spout,funn,tornd)
+  rm(torna,spout,funn,tornd)
+  
+  heat1 <- nwsDT3[grep("heat", nwsDT3$EVTYPE, ignore.case = T),]
+  heat2 <- nwsDT3[grep("high temp", nwsDT3$EVTYPE, ignore.case = T),]
+  heat3 <- nwsDT3[grep("record high$", nwsDT3$EVTYPE, ignore.case = T),]
+  heat <- rbind(heat1,heat2,heat3)
+  rm(heat1,heat2,heat3)
+  
+  slide <- nwsDT3[grep("slide", nwsDT3$EVTYPE, ignore.case = T),]
+
+  slide$EVTYPE <- 'landslide'
+  heat$EVTYPE <- 'heat'
+  wind$EVTYPE <- 'wind'
+  hail$EVTYPE <- 'hail'
+  tornadoes$EVTYPE <- 'tornadoes'
+  cyclone$EVTYPE <- 'hurricane'
+  flooding$EVTYPE <- 'flood'
+  winter$EVTYPE <- 'winter.weather'
+  drought$EVTYPE <- 'drought'
+  fire$EVTYPE <- 'fire'
+  fog$EVTYPE <- 'fog'
+  rip$EVTYPE <- 'rip.currents'
+
+#   
+#   
+  events <- rbind(wind,
+                  hail,
+                  heat,
+                  tornadoes,
+                  cyclone,
+                  flooding,
+                  winter,
+                  drought,
+                  fire,
+                  slide,
+                  fog,
+                  rip)
+ 
+
+
+```
+ 
+  This list of names was normalized into 12 groups:
+  
+```{r, include=TRUE, echo=TRUE, results='asis'}
+
+  evtypes <- as.data.frame(unique(events$EVTYPE))
+  names(evtypes) <- "Normalized Event Types"
+  tbl <- autoformat(xtable(evtypes, caption = "Table 1: Normalized event types"))
+  print(tbl, type = 'html')
+
+```
+  
+
+
+# Results
+
+Given the ubiquity of news regarding extreme weather-related events and their consequences, it is no surprise that the overall amounts are staggering. We restrict our investigation to the top five weather events in terms of overall magnitude of losses, since these account for over half of the aggregate total both of economic losses and casualties. Losses are shown in dollars.
+
+
+```{r, include=TRUE, echo=TRUE, results='asis'}
+  
+  evgrouped <- group_by(events, EVTYPE)
+
+  evsummed <- summarize(evgrouped, 
+                        sum(Economic.Losses), 
+                        sum(Casualties),
+                        sum(INJURIES),
+                        sum(FATALITIES),
+                        sum(CROPDMG),
+                        sum(PROPDMG))
+  
+  names(evsummed) <- c('Event',
+                       'Economic.Losses',
+                       'Casualties',
+                       'Injuries',
+                       'Fatalities',
+                       'Crop.Loss',
+                       'Property.Loss')
+
+  totals <- select(events, Economic.Losses, Casualties)
+  totals <- as.data.frame(colSums(totals))
+  names(totals) <- c("Total")
+  rownames(totals) <- c("Economic Losses ($K)","Casualties (n)")
+  tbl <- autoformat(xtable(totals, 
+                           caption = "Table 2. Total Economic Losses (property and crop) and Casualties (injuries and fatalities)", align = c("r","r") ))
+  print(tbl, type = "html")
+```
+
+  We want to look deeper, and see which types of events produce the most significant economic losses and casualties. Within each of these catagories of damage, we will look one level deeper, and see what proportion of the components of each are produced by the event type. 
+  
+  Although we are conducting only an exploratory analysis, we start with an informal null hypothesis that the event types cause roughly proportionate damage within their components. For example, we posit that the event type causing the most economic loss overall will be the event type causing the most crop loss and property loss.
+
+## Property and crop losses due to weather
+
+Looking at a breakdown of the totals for all economic losses, property, and crop losses, we can see that property losses outpace crop losses roughly fivefold. 
+
+```{r,include=TRUE, echo=TRUE, results='asis'}
+
+  evsorted.econ <- arrange(evsummed, desc(Economic.Losses))
+  top5.econ <- evsorted.econ[1:5,]
+  top10.econ <- evsorted.econ[1:10,]
+  top50.econ <- evsorted.econ[1:50,]
+  top20.econ <- evsorted.econ[1:20,]
+
+  loss.amounts <- with (top5.econ, as.data.frame(cbind(Event,Economic.Losses,                                      Property.Loss,
+                        Crop.Loss)))
+  names(loss.amounts) <- c("Event Type","All Economic Losses","Property Losses","Crop Losses")
+  tbl <- xtable(loss.amounts, 
+                           caption = "Table 3. Economic Losses by Event Type " , align = c("r","l","r","r","r"))
+  digits(tbl) <- xdigits(tbl)
+  display(tbl) <- xdisplay(tbl)
+  print(tbl, type = 'html')
+  
+```
+  
+But the proportion of losses by event type reveals another unexpected insight: damage from floods of all types is the apparent leading cause of both property and crop loss.  Our informal null hypothesis appears to be disproven here.  
+
+  In the barplot below, the different scales of the columnar values preclude use of one scale for all. the approach taken is to produce a stacked bar chart with each stack segment showing its proportion of the columnar total.  For example, flood events represent about 50% of all economic losses; hurricane events about 30%; and so on.
+
+
+```{r,include=TRUE, echo=TRUE}
+
+  loss.proportions <- with (top5.econ, cbind(Economic.Losses/sum(Economic.Losses),                                      Property.Loss/sum(Property.Loss),
+                        Crop.Loss/sum(Crop.Loss)))
+
+  par(mar = c(10,5,5,12))
+  barplot(loss.proportions,
+  ylab = "Losses (Proportion of Column Total)",
+  legend.text = top5.econ$Event,
+          names.arg = c("All economic losses","Property losses","Crop losses"),
+  col = c("red",
+  "blue",
+  "green",
+  "purple",
+  "yellow"),
+  main = "Weather-Related Economic Losses",
+  las="3",args.legend = list(x = 5.5, y = 1))
+
+```
+
+Figure 2. Economic losses due to weather  
+
+## Health-related impact of weather events
+  
+  We next turn our attention to the number of injuries and fatalities caused by weather events. We aggregate the number of injuries and fatalities and call it casualties for an overall measure, but here as well we are interested in looking at the breakdown. As our informal null hypothesis, we posit that the magnitude of injuries and fatalities associated with extreme weather events is roughly proportionate.  
+
+
+```{r,include=TRUE, echo=TRUE, results='asis'}
+  
+  evsorted.hlth <- arrange(evsummed, desc(Casualties))
+  top5.hlth <- evsorted.hlth[1:5,]
+  top10.hlth <- evsorted.hlth[1:10,]
+  top50.hlth <- evsorted.hlth[1:50,]
+  top20.hlth <- evsorted.hlth[1:20,]
+
+  
+  hlth.amounts <- with (top5.econ, cbind(Event,Casualties,                                      Injuries,
+                        Fatalities))
+
+  tbl <- xtable(hlth.amounts, 
+                           caption = "Table 3. Casualties by Event Type" , align = c("r","l","r","r","r"))
+  print(tbl, type = 'html')
+  
+```
+
+  
+  Hurricanes barely make an appearance in the top five ranking in terms of casualties, in spite of their newsworthiness. Tornadoes, however, do live up to their headlines: there are, after all many more tornadoes than hurricanes every year.  
+  
+  Once again, looking deeper provides an unintuitive insight. While tornadoes do produce the greatest proportion of injuries, flood events produce more fatalities, and winter weather events produce disproportionately more fatalities than injuries.  
+
+  In the barplot below, the different scales of the columnar values preclude use of one scale for all. the approach taken is to produce a stacked bar chart with each stack segment showing its proportion of the columnar total.  For example, flood events represent about 22% of all casualties; tornado events about 60%; and so on.
+    
+  
+```{r, include=TRUE, echo=TRUE}
+
+  hlth.proportions <- with (top5.econ, cbind(Casualties/sum(Casualties),                                      Injuries/sum(Injuries),
+                        Fatalities/sum(Fatalities)))
+
+  par(mar = c(10,5,5,12))
+  barplot(hlth.proportions,
+  ylab = "Casualties (Proportion of Column Total)",
+  legend.text = top5.econ$Event,
+          names.arg = c("All casualties","Injuries","Fatalities"),
+  col = c("red",
+  "blue",
+  "green",
+  "purple",
+  "yellow"),
+  main = "Weather-Related Casualties",
+  las="3",args.legend = list(x = 5.5, y = 1))
+
+
+```
+  
+  Figure 3. Casualties due to weather  
+
+  
+# Conclusion
+
+  The "hidden agenda" of this investigation has been to demonstrate mastery of the principle of reproducible research. The author hopes you have enjoyed the exercise.
+  
+# Appendix: Session Information
+
+```{r, include=TRUE, echo=TRUE}
+sessionInfo()
+```
